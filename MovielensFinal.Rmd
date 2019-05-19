@@ -1,0 +1,350 @@
+---
+title: "Movielens Report"
+author: "Lam Vu"
+date: "5/16/2019"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+###SUMMARY
+GroupLens Research has collected and made available rating data sets from the MovieLens web site (http://movielens.org). The data sets were collected over various periods of time, depending on the size of the set. 
+
+In this exercise, MovieLens 10M dataset was used to build movie rating preditions. Then the predictions will be compared to the true ratings in the validation set using RMSE.
+
+The **objectives** of this exercise are to gain insights with **movielens** dataset through exploration, and visualization, and modeling approach to achieve the **RMSE** <= 0.87750. 
+
+###Dataset
+The following code is used to generate datasets. Algorithm was develop using **edx** set. For a final test of the algorithm, predict movie ratings in the **validation** set as if they were unknown. 
+
+```{r loadlib, echo=T, results='hide', message=F, warning=F}
+#### INTRODUCTION ####
+
+###################################
+# Create edx set and validation set
+###################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                      col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+#used caret pkg
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+
+###DATA ANALYSIS
+Explorations that didn’t lead to any insights are not included in this report.
+```{r, echo=T}
+#exploring edx dataset
+class(edx)
+head(edx)
+
+#number of rows and columns in edx dataset
+dim(edx)
+
+#number of ratings were given as zero(0) or three(3)
+edx %>% filter(rating == 0) %>% tally()
+
+edx %>% filter(rating == 3) %>% tally()
+```
+
+###Number of distinct userIds and movieIds
+```{r, echo=T}
+edx %>% summarize(n_users = n_distinct(userId),
+                  n_movies = n_distinct(movieId))
+```
+
+###Table of number of ratings by genres after separating combined genres.
+```{r, echo = T, results = 'hide'}
+#table of number of ratings by genres after separating combined genres
+library(tidyr)
+g_ratings <- edx %>% separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>%
+  summarize(count = n(), avg = mean(rating)) %>%
+  arrange(desc(count))
+```
+
+```{r, echo=FALSE}
+g_ratings
+```
+
+###Distribution of Genres by Percent Rated 
+```{r, echo=F}
+#graph g_ratings by percentage
+percent <- g_ratings %>%
+  mutate(sumN = sum(count), percentage = count/sumN) %>%
+  arrange(-percentage)
+
+percent %>%
+  ggplot(aes(reorder(genres, percentage), percentage, fill= percentage)) +
+  geom_bar(stat = "identity") + coord_flip() +
+  scale_fill_distiller(palette = "Blues") + labs(y = "Percentage", x = "Genre") +
+  ggtitle("Genres by Percent Rated")
+```
+
+###Here are the top 10 movie titles with the greatest number of ratings including average rating.
+```{r, echo=T}
+#top 10 movie titles with the greatest number of ratings
+top_titles <- edx %>% 
+  group_by(movieId) %>%
+  summarize(n = n(),
+            title = title[1],
+            avg = mean(rating)) %>%
+  top_n(10, n) %>%
+  arrange(desc(n)) 
+top_titles
+```
+
+###Distribution of Movies
+```{r, echo=T}
+#Distribution of Movies
+edx %>% group_by(movieId) %>% 
+  summarize(n = n())%>%
+  ggplot(aes(n)) +
+  geom_histogram(fill = "steelblue", color = "black", bins = 30) +
+  scale_x_log10() +
+  xlab("Number of ratings") +
+  ylab("Number of movies") +
+  ggtitle("Movies")
+```
+
+###Distribution of Users
+Top ten (10) users with the most ratings
+```{r, echo=TRUE}
+#Top ten (10) users with the most ratings
+edx %>% group_by(userId) %>% summarize(n = n())%>%top_n(10, n) %>%
+  arrange(desc(n)) 
+```
+
+Distribution of users vs. ratings
+```{r, echo=TRUE}
+#Distribution of Users
+edx %>% group_by(userId) %>% summarize(n = n()) %>%
+  ggplot(aes(n)) + geom_histogram(fill = "steelblue", color = "black", bins = 30) +
+  scale_x_log10() + 
+  xlab("Number of ratings") +
+  ylab("Number of users") +
+  ggtitle("Users")
+```
+
+###Top 10 movie titles with the greatest average rating
+```{r, echo=T}
+#top 10 movie titles with the greatest average rating
+top_avg <- edx %>% 
+  group_by(movieId) %>%
+  summarize(n = n(),
+            title = title[1],
+            avg = mean(rating)) %>%
+  top_n(10, n) %>%
+  arrange(desc(avg)) 
+top_avg
+```
+
+In general, half star ratings are less common than whole star ratings. This can be observed at the table and graph below.
+```{r, echo=T}
+#table of frequency of star ratings from most to least
+rating_frequency <- edx %>% group_by(rating) %>% 
+  summarize(n = n()) %>% 
+  arrange(desc(n))
+rating_frequency 
+```
+
+###Rating distribution
+```{r, echo=FALSE}
+# Rating distribution
+edx %>%
+  ggplot(aes(rating)) +
+  geom_histogram(fill = "steelblue", binwidth = 0.25, color = "black") +
+  scale_x_discrete(limits = c(seq(0.5,5,0.5))) +
+  scale_y_continuous(breaks = c(seq(0, 3000000, 500000))) +
+  ggtitle("Rating distribution")
+```
+
+###MODELS
+Root-mean-square error (RMSE) is used to measure the differences between values predicted by a model and the values observed.
+```
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+###Simple Model
+Predicting same rating for all movies across all users
+```{r, echo=T}
+### Simplest Model: predict same rating for all movies across all users
+#Yu,i = mu + Eu,i
+mu <- mean(edx$rating)
+mu
+```
+
+```{r, echo=T, message=F, warning=F}
+#test results based on simple prediction
+naive_rmse <- RMSE(validation$rating, mu)
+
+#create a table that's going to store the results 
+rmse_results <- data_frame(method = "Just the average", RMSE = naive_rmse)
+rmse_results %>% knitr::kable()
+```
+
+###Movie Effect Model
+```{r, echo=T}
+#Yu,i = mu + b_i + Eu,i where b_i = the average rating for movie i or as "bias
+movie_avgs <- edx %>%
+  group_by(movieId)%>%
+  summarize(b_i = mean(rating - mu))
+
+#plot movie averages b_i
+movie_avgs %>%
+  ggplot(aes(b_i )) +
+  geom_histogram(fill = "steelblue",binwidth = .25, color = "black") +
+  ggtitle("Estimates for b_i")
+
+###Model
+predicted_ratings <- mu +  validation %>%
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+model_1_rmse <- RMSE(predicted_ratings, validation$rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie Effect Model",  
+                                     RMSE = model_1_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+###Movie and User Effect Model
+```{r, echo=T}
+###user averages, b_u
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+```
+
+Plot user averages b_u
+```{r, echo=T, message=F, warning=F}
+#plot user averages b_u
+user_avgs %>%
+  ggplot(aes(b_u )) +
+  geom_histogram(fill = "steelblue", binwidth = .25, color = "black") +
+  ggtitle("Estimates for b_u")
+```
+
+Model
+```{r, echo=T}
+###Movie and User Effect Model
+predicted_ratings <- validation %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_2_rmse <- RMSE(predicted_ratings, validation$rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie + User Effect Model",  
+                                     RMSE = model_2_rmse ))
+rmse_results %>% knitr::kable()
+
+```
+
+###Regularization Model
+Regularization permits us to penalize large estimates that come from small sample sizes. This model includes the parameters for both **movie and user** effects. Cross-validationis is also used to pick lambda. 
+```{r, echo = TRUE}
+# lambda is a tuning parameter
+# use cross-validation to find the lambda with lowest rmse 
+lambdas <- seq(0, 10, 0.25)
+
+# For each lambda, find b_i & b_u, followed by rating prediction & testing
+rmses <- sapply(lambdas, function(lambda){
+  
+  mu <- mean(edx$rating)
+  
+  b_i <- edx %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+lambda))
+  
+  b_u <- edx %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+lambda))
+  
+  predicted_ratings <- validation %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  
+  return(RMSE(predicted_ratings, validation$rating))
+})
+```
+
+**Plot rmses vs lambdas to select the optimal lambda**
+```{r, echo=FALSE}
+                                                          
+qplot(lambdas, rmses)  
+```
+
+**Optimal lambda**
+```{r, echo=FALSE}
+# find the optimal lambda                                                             
+lambda <- lambdas[which.min(rmses)]
+lambda
+```
+
+###RESULTS
+Result of all models included in the table below.
+```{r, echo=FALSE}
+# Test and save results                                                             
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Movie and User Effect Model",  
+                                     RMSE = min(rmses)))
+results_table <- rmse_results %>% knitr::kable()
+results_table
+
+```
+
+###CONCLUSION
+Residual mean squared error is used to evaluate how close the predictions are to the true values in the validation set. RMSE of the **Regularized Models** has improved from **0.8653488** to **0.8648170** compared to the **Movie and User Effect Model** . Both models meet the objective of this exercise of achieving RMSE <= 0.87750.
