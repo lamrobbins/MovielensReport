@@ -1,3 +1,7 @@
+
+##title: "Movielens Report"
+##author: "Lam Vu"
+
 ###################################
 # Create edx set and validation set
 ###################################
@@ -214,7 +218,7 @@ rmses <- sapply(lambdas, function(l){
     left_join(b_i, by = "movieId") %>%
     left_join(b_u, by = "userId") %>%
     mutate(pred = mu + b_i + b_u) %>%
-    .(pred)
+    .$pred
   
   return(RMSE(predicted_ratings, validation$rating))
 })
